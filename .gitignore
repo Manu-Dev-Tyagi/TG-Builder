@@ -1,0 +1,14 @@
+node_modules/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+*.md
+coverage/
+dist/
+build/
+.vscode/
+.idea/
+.git/
+tsc_output/frontend/node_modules/
+backend/venv/

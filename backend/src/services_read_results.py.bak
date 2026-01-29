@@ -1,0 +1,80 @@
+from typing import List, Optional
+from src.db import get_db
+from src.models_portfolio import FinalPersona
+from src.models_campaign import CampaignBlueprint
+# from src.models_budget import BudgetPlan # Need schema matching DB storage
+
+class ResultsReadService:
+    @staticmethod
+    def get_final_personas(project_id: str) -> List[dict]:
+        db = get_db()
+        # Join with raw_personas to get name and other data
+        response = db.table("final_personas").select("*, raw_personas(persona_name, persona_data)").eq("project_id", project_id).execute()
+        
+        # Flatten the response for frontend convenience
+        flattened = []
+        for item in response.data:
+            raw = item.get("raw_personas", {})
+            # Merge item with raw fields
+            item["name"] = raw.get("persona_name", "Unnamed Persona")
+            item["full_data"] = raw.get("persona_data", {})
+            flattened.append(item)
+            
+        return flattened
+
+    @staticmethod
+    def get_campaign_blueprints(project_id: str) -> List[dict]:
+        db = get_db()
+        response = db.table("targeting_blueprints").select("*").eq("project_id", project_id).execute()
+        
+        # Filter out budget plans if mixed in same table
+        campaigns = [r for r in response.data if r.get("platform") != "BudgetPlan"]
+        return campaigns
+
+    @staticmethod
+    def get_budget_plan(project_id: str) -> Optional[dict]:
+        db = get_db()
+        response = db.table("targeting_blueprints").select("*").eq("project_id", project_id).eq("platform", "BudgetPlan").execute()
+        if response.data:
+            # Return the most recent one
+            return response.data[-1]
+        return None
+
+    @staticmethod
+    def get_locked_strategy(project_id: str) -> dict:
+        """
+        Reconstructs the immutable 'Engine A' strategy for the Frontend Intent Lock Card.
+        """
+        db = get_db()
+        
+        # 1. Get Brand Inputs (for Decision Speed)
+        brand_res = db.table("brand_inputs").select("decision_speed, primary_objective").eq("project_id", project_id).single().execute()
+        brand_data = brand_res.data or {}
+        
+        # 2. Get One Final Persona (for Campaign Type & Funnel Depth inference)
+        # We assume strategy is uniform across project (Hardware Lock)
+        persona_res = db.table("final_personas").select("campaign_type, notes").eq("project_id", project_id).limit(1).execute()
+        
+        strategy = {
+            "campaign_type": "Pending...",
+            "decision_speed": brand_data.get("decision_speed", "Normal"),
+            "funnel_eligibility": "Full Funnel", # Default
+            "status": "LOCKED",
+            "notes": ""
+        }
+        
+        if persona_res.data:
+            p = persona_res.data[0]
+            strategy["campaign_type"] = p.get("campaign_type", "NA")
+            strategy["notes"] = p.get("notes", "")
+            
+            # Infer Funnel Depth/Eligibility from Campaign Type or Notes?
+            # Or use deterministic logic: Fast -> NO_TOF
+            if "Fast" in strategy["decision_speed"]:
+                strategy["funnel_eligibility"] = "Bottom of Funnel Only (TOF Suppressed)"
+            
+            # Check for NA / Rejection
+            if strategy["campaign_type"] == "NA":
+                strategy["status"] = "NA_REJECTION"
+        
+        return strategy
